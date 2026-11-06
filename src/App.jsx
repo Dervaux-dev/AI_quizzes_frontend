@@ -2,9 +2,30 @@ import { useEffect, useState } from 'react';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/u, '');
 
+async function readJsonResponse(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(
+      `Expected a JSON response from the API, but received ${contentType || 'an unknown content type'}. Restart or redeploy the backend and frontend together.`,
+    );
+  }
+
+  try {
+    return await response.json();
+  } catch {
+    throw new Error('The API returned invalid JSON. Restart or redeploy the backend and frontend together.');
+  }
+}
+
 async function getErrorMessage(response) {
-  const body = await response.json();
-  return body.error || `Request failed (${response.status}).`;
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    const body = await readJsonResponse(response);
+    return body.error || `Request failed (${response.status}).`;
+  }
+
+  const message = (await response.text()).trim();
+  return message || `Request failed (${response.status}).`;
 }
 
 async function loadCertificate(profile) {
@@ -34,7 +55,7 @@ async function sendCertificateToEmail(profile) {
     }),
   });
 
-  const body = await response.json();
+  const body = await readJsonResponse(response);
   if (!response.ok) {
     throw new Error(body.error || `Request failed (${response.status}).`);
   }
@@ -87,7 +108,7 @@ function App() {
         throw new Error(await getErrorMessage(response));
       }
 
-      const publicQuiz = await response.json();
+      const publicQuiz = await readJsonResponse(response);
       const registration = {
         fullname: form.fullname.trim(),
         email: form.email.trim(),
@@ -148,7 +169,25 @@ function App() {
           answers,
         }),
       });
-      const submission = await response.json();
+      let submission;
+      let generatedCertificateUrl = '';
+      if (response.headers.get('content-type')?.includes('image/png')) {
+        const encodedResult = response.headers.get('X-Quiz-Result');
+        if (!encodedResult) {
+          throw new Error(
+            'The backend returned a certificate without the quiz result. Restart or redeploy the backend and frontend together.',
+          );
+        }
+
+        try {
+          submission = JSON.parse(atob(encodedResult));
+        } catch {
+          throw new Error('The backend returned an invalid quiz result.');
+        }
+        generatedCertificateUrl = URL.createObjectURL(await response.blob());
+      } else {
+        submission = await readJsonResponse(response);
+      }
 
       if (!response.ok && submission.passed !== true) {
         throw new Error(submission.error || `Quiz submission failed (${response.status}).`);
@@ -160,27 +199,36 @@ function App() {
       }
 
       setEmailSent(Boolean(submission.emailSent));
-      if (submission.emailSent) {
+      if (submission.emailQueued) {
+        setEmailStatus({
+          type: 'info',
+          message: `Your certificate is ready. Email delivery to ${profile.email} is still pending.`,
+        });
+      } else if (submission.emailSent) {
         setEmailStatus({
           type: 'success',
           message: `A copy was sent to ${profile.email}.`,
         });
       } else {
         setEmailStatus({
-          type: 'info',
+          type: submission.error ? 'error' : 'info',
           message: submission.error
-            ? `${submission.error} You can still download your certificate here.`
+            ? `${submission.error} You can still download your certificate or retry sending it.`
             : 'Your certificate is ready to download.',
         });
       }
 
       setActiveTab('certificate');
-      try {
-        setCertificateUrl(await loadCertificate(profile));
-      } catch (error) {
-        setCertificateError(
-          error.message || 'Could not create the certificate preview.',
-        );
+      if (generatedCertificateUrl) {
+        setCertificateUrl(generatedCertificateUrl);
+      } else {
+        try {
+          setCertificateUrl(await loadCertificate(profile));
+        } catch (error) {
+          setCertificateError(
+            error.message || 'Could not create the certificate preview.',
+          );
+        }
       }
     } catch (error) {
       setStartingError(error.message || 'Could not submit the quiz. Please try again.');
