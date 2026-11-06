@@ -23,6 +23,25 @@ async function loadCertificate(profile) {
   return URL.createObjectURL(await response.blob());
 }
 
+async function sendCertificateToEmail(profile) {
+  const response = await fetch(`${API_BASE_URL}/api/certificates/email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fullname: profile.fullname,
+      email: profile.email,
+      role: profile.role,
+    }),
+  });
+
+  const body = await response.json();
+  if (!response.ok) {
+    throw new Error(body.error || `Request failed (${response.status}).`);
+  }
+
+  return body;
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('registration');
   const [form, setForm] = useState({
@@ -37,7 +56,9 @@ function App() {
   const [result, setResult] = useState(null);
   const [certificateUrl, setCertificateUrl] = useState('');
   const [certificateError, setCertificateError] = useState('');
-  const [emailNotice, setEmailNotice] = useState('');
+  const [emailStatus, setEmailStatus] = useState({ type: 'info', message: '' });
+  const [emailSent, setEmailSent] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
   const [loadingQuiz, setLoadingQuiz] = useState(false);
   const [submittingQuiz, setSubmittingQuiz] = useState(false);
   const [startingError, setStartingError] = useState('');
@@ -77,7 +98,9 @@ function App() {
       setQuiz(publicQuiz);
       setAnswers({});
       setResult(null);
-      setEmailNotice('');
+      setEmailStatus({ type: 'info', message: '' });
+      setEmailSent(false);
+      setSendingEmail(false);
       setCertificateError('');
       setCertificateUrl('');
       setActiveTab('quiz');
@@ -112,7 +135,8 @@ function App() {
 
     setStartingError('');
     setSubmittingQuiz(true);
-    setEmailNotice('');
+    setEmailStatus({ type: 'info', message: '' });
+    setEmailSent(false);
     setCertificateError('');
 
     try {
@@ -135,14 +159,19 @@ function App() {
         return;
       }
 
+      setEmailSent(Boolean(submission.emailSent));
       if (submission.emailSent) {
-        setEmailNotice(`A copy was sent to ${profile.email}.`);
+        setEmailStatus({
+          type: 'success',
+          message: `A copy was sent to ${profile.email}.`,
+        });
       } else {
-        setEmailNotice(
-          submission.error
+        setEmailStatus({
+          type: 'info',
+          message: submission.error
             ? `${submission.error} You can still download your certificate here.`
             : 'Your certificate is ready to download.',
-        );
+        });
       }
 
       setActiveTab('certificate');
@@ -172,6 +201,34 @@ function App() {
       setCertificateError(
         error.message || 'Could not create the certificate preview.',
       );
+    }
+  }
+
+  async function emailCertificate() {
+    if (!profile || sendingEmail) {
+      return;
+    }
+
+    setSendingEmail(true);
+    setEmailStatus({
+      type: 'info',
+      message: `Sending your certificate to ${profile.email}…`,
+    });
+
+    try {
+      await sendCertificateToEmail(profile);
+      setEmailSent(true);
+      setEmailStatus({
+        type: 'success',
+        message: `Certificate sent to ${profile.email}.`,
+      });
+    } catch (error) {
+      setEmailStatus({
+        type: 'error',
+        message: error.message || 'Could not send the certificate email.',
+      });
+    } finally {
+      setSendingEmail(false);
     }
   }
 
@@ -394,9 +451,20 @@ function App() {
               </div>
             </div>
 
-            <p className={result.emailSent ? 'success-message' : 'info-message'} role="status">
-              {emailNotice}
-            </p>
+            {emailStatus.message && (
+              <p
+                className={
+                  emailStatus.type === 'error'
+                    ? 'error-message'
+                    : emailStatus.type === 'success'
+                      ? 'success-message'
+                      : 'info-message'
+                }
+                role={emailStatus.type === 'error' ? 'alert' : 'status'}
+              >
+                {emailStatus.message}
+              </p>
+            )}
 
             {certificateError && (
               <div className="error-message" role="alert">
@@ -408,31 +476,44 @@ function App() {
             )}
 
             {certificateUrl && (
-              <>
-                <div className="certificate-preview">
-                  <img
-                    src={certificateUrl}
-                    alt={`Certificate of participation for ${profile.fullname}`}
-                  />
-                </div>
-                <div className="certificate-actions">
-                  <a
-                    className="primary-button download-button"
-                    href={certificateUrl}
-                    download="certificate-of-participation.png"
-                  >
-                    Download certificate <span aria-hidden="true">↓</span>
-                  </a>
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => setActiveTab('quiz')}
-                  >
-                    Review quiz result
-                  </button>
-                </div>
-              </>
+              <div className="certificate-preview">
+                <img
+                  src={certificateUrl}
+                  alt={`Certificate of participation for ${profile.fullname}`}
+                />
+              </div>
             )}
+
+            <div className="certificate-actions">
+              {certificateUrl && (
+                <a
+                  className="primary-button download-button"
+                  href={certificateUrl}
+                  download="certificate-of-participation.png"
+                >
+                  Download certificate <span aria-hidden="true">↓</span>
+                </a>
+              )}
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={emailCertificate}
+                disabled={sendingEmail}
+              >
+                {sendingEmail
+                  ? 'Sending…'
+                  : emailSent
+                    ? 'Resend to email'
+                    : 'Send to email'}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setActiveTab('quiz')}
+              >
+                Review quiz result
+              </button>
+            </div>
           </div>
         )}
       </section>

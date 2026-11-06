@@ -297,8 +297,13 @@ a {
   color: #53647b;
 }
 
-.secondary-button:hover {
+.secondary-button:hover:not(:disabled) {
   background: #f6f8fb;
+}
+
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .error-message {
