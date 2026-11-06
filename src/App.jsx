@@ -1,0 +1,448 @@
+import { useEffect, useState } from 'react';
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/u, '');
+
+async function getErrorMessage(response) {
+  const body = await response.json();
+  return body.error || `Request failed (${response.status}).`;
+}
+
+async function loadCertificate(profile) {
+  const response = await fetch(`${API_BASE_URL}/api/certificates/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fullname: profile.fullname,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  return URL.createObjectURL(await response.blob());
+}
+
+function App() {
+  const [activeTab, setActiveTab] = useState('registration');
+  const [form, setForm] = useState({
+    fullname: '',
+    email: '',
+    role: '',
+  });
+  const [consent, setConsent] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [quiz, setQuiz] = useState(null);
+  const [answers, setAnswers] = useState({});
+  const [result, setResult] = useState(null);
+  const [certificateUrl, setCertificateUrl] = useState('');
+  const [certificateError, setCertificateError] = useState('');
+  const [emailNotice, setEmailNotice] = useState('');
+  const [loadingQuiz, setLoadingQuiz] = useState(false);
+  const [submittingQuiz, setSubmittingQuiz] = useState(false);
+  const [startingError, setStartingError] = useState('');
+
+  useEffect(() => {
+    return () => {
+      if (certificateUrl) {
+        URL.revokeObjectURL(certificateUrl);
+      }
+    };
+  }, [certificateUrl]);
+
+  function updateForm(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+  }
+
+  async function startQuiz(event) {
+    event.preventDefault();
+    setStartingError('');
+    setLoadingQuiz(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/quiz`);
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const publicQuiz = await response.json();
+      const registration = {
+        fullname: form.fullname.trim(),
+        email: form.email.trim(),
+        role: form.role.trim(),
+      };
+
+      setProfile(registration);
+      setQuiz(publicQuiz);
+      setAnswers({});
+      setResult(null);
+      setEmailNotice('');
+      setCertificateError('');
+      setCertificateUrl('');
+      setActiveTab('quiz');
+    } catch (error) {
+      setStartingError(error.message || 'Could not load the quiz. Please try again.');
+    } finally {
+      setLoadingQuiz(false);
+    }
+  }
+
+  function selectAnswer(questionId, optionIndex) {
+    setAnswers((current) => ({ ...current, [questionId]: optionIndex }));
+  }
+
+  async function submitQuiz(event) {
+    event.preventDefault();
+    if (!quiz || !profile) {
+      return;
+    }
+
+    const unanswered = quiz.questions.find(
+      (question) => !Number.isInteger(answers[question.id]),
+    );
+    if (unanswered) {
+      setStartingError('Please answer every question before submitting.');
+      document.getElementById(`question-${unanswered.id}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+      return;
+    }
+
+    setStartingError('');
+    setSubmittingQuiz(true);
+    setEmailNotice('');
+    setCertificateError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/quiz/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...profile,
+          answers,
+        }),
+      });
+      const submission = await response.json();
+
+      if (!response.ok && submission.passed !== true) {
+        throw new Error(submission.error || `Quiz submission failed (${response.status}).`);
+      }
+
+      setResult(submission);
+      if (!submission.passed) {
+        return;
+      }
+
+      if (submission.emailSent) {
+        setEmailNotice(`A copy was sent to ${profile.email}.`);
+      } else {
+        setEmailNotice(
+          submission.error
+            ? `${submission.error} You can still download your certificate here.`
+            : 'Your certificate is ready to download.',
+        );
+      }
+
+      setActiveTab('certificate');
+      try {
+        setCertificateUrl(await loadCertificate(profile));
+      } catch (error) {
+        setCertificateError(
+          error.message || 'Could not create the certificate preview.',
+        );
+      }
+    } catch (error) {
+      setStartingError(error.message || 'Could not submit the quiz. Please try again.');
+    } finally {
+      setSubmittingQuiz(false);
+    }
+  }
+
+  async function retryCertificate() {
+    if (!profile) {
+      return;
+    }
+
+    setCertificateError('');
+    try {
+      setCertificateUrl(await loadCertificate(profile));
+    } catch (error) {
+      setCertificateError(
+        error.message || 'Could not create the certificate preview.',
+      );
+    }
+  }
+
+  function retryQuiz() {
+    setAnswers({});
+    setResult(null);
+    setStartingError('');
+    setActiveTab('quiz');
+  }
+
+  return (
+    <main className="page-shell">
+      <header className="site-header">
+        <a
+          className="brand"
+          href="#registration"
+          onClick={() => setActiveTab('registration')}
+          aria-label="AI Learning Session home"
+        >
+          <span className="brand-mark" aria-hidden="true">AI</span>
+          <span>Learning session</span>
+        </a>
+        <span className="school-name">MSGR. F. MUBILIGI CATHOLIC TSS</span>
+      </header>
+
+      <section className="hero">
+        <p className="eyebrow">LEARN · TAKE THE QUIZ · EARN YOUR CERTIFICATE</p>
+        <h1>Introduction to Artificial Intelligence</h1>
+        <p className="hero-copy">
+          Register for the learning session, complete a short quiz, and receive
+          your certificate of participation.
+        </p>
+      </section>
+
+      <section className="content-card" aria-live="polite">
+        {activeTab === 'registration' && (
+          <div className="registration-layout">
+            <div className="section-intro">
+              <span className="section-kicker">GET STARTED</span>
+              <h2>Tell us about yourself</h2>
+              <p>
+                Enter the details you want associated with your certificate.
+                Your full name will appear exactly as entered after trimming
+                extra spaces.
+              </p>
+              <div className="info-note">
+                <span className="info-icon" aria-hidden="true">i</span>
+                <span>
+                  Complete the quiz and meet the passing score to receive your
+                  certificate.
+                </span>
+              </div>
+            </div>
+
+            <form className="registration-form" onSubmit={startQuiz}>
+              <label className="field">
+                <span>Full name <span className="required">*</span></span>
+                <input
+                  autoComplete="name"
+                  name="fullname"
+                  value={form.fullname}
+                  onChange={updateForm}
+                  placeholder="e.g. Jane Doe"
+                  maxLength={80}
+                  required
+                />
+              </label>
+
+              <label className="field">
+                <span>Email address <span className="required">*</span></span>
+                <input
+                  autoComplete="email"
+                  name="email"
+                  type="email"
+                  value={form.email}
+                  onChange={updateForm}
+                  placeholder="you@example.com"
+                  maxLength={254}
+                  required
+                />
+                <small>We’ll email your certificate here when delivery is configured.</small>
+              </label>
+
+              <label className="field">
+                <span>Your role <span className="required">*</span></span>
+                <input
+                  autoComplete="organization-title"
+                  name="role"
+                  value={form.role}
+                  onChange={updateForm}
+                  placeholder="e.g. Student, Teacher"
+                  maxLength={60}
+                  required
+                />
+              </label>
+
+              <label className="consent-row">
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(event) => setConsent(event.target.checked)}
+                  required
+                />
+                <span>
+                  I agree to use the full name entered above on my certificate.
+                </span>
+              </label>
+
+              {startingError && <p className="error-message" role="alert">{startingError}</p>}
+
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={!consent || loadingQuiz}
+              >
+                {loadingQuiz ? 'Loading quiz…' : 'Start quiz'}
+                {!loadingQuiz && <span aria-hidden="true">→</span>}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {activeTab === 'quiz' && quiz && profile && (
+          <div className="quiz-content">
+            <div className="quiz-heading">
+              <div>
+                <span className="section-kicker">YOUR QUIZ</span>
+                <h2>{quiz.title}</h2>
+                <p>
+                  Select one answer for each question. You need at least{' '}
+                  <strong>{quiz.passMarkPercent}%</strong> to pass.
+                </p>
+              </div>
+              <div className="progress-pill">
+                {Object.keys(answers).length} / {quiz.questions.length} answered
+              </div>
+            </div>
+
+            <form className="question-list" onSubmit={submitQuiz}>
+              {quiz.questions.map((question, questionIndex) => (
+                <fieldset
+                  className="question-card"
+                  id={`question-${question.id}`}
+                  key={question.id}
+                >
+                  <legend>
+                    <span className="question-index">
+                      {String(questionIndex + 1).padStart(2, '0')}
+                    </span>
+                    <span>{question.prompt}</span>
+                  </legend>
+                  <div className="answer-options">
+                    {question.options.map((option, optionIndex) => (
+                      <label
+                        className={`answer-option${answers[question.id] === optionIndex ? ' selected' : ''}`}
+                        key={`${question.id}-${optionIndex}`}
+                      >
+                        <input
+                          type="radio"
+                          name={question.id}
+                          value={optionIndex}
+                          checked={answers[question.id] === optionIndex}
+                          onChange={() => selectAnswer(question.id, optionIndex)}
+                        />
+                        <span className="radio-indicator" aria-hidden="true" />
+                        <span>{option}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+
+              {startingError && <p className="error-message" role="alert">{startingError}</p>}
+
+              {result && !result.passed && (
+                <div className="result-banner fail" role="status">
+                  <strong>{result.percent}% — not quite yet</strong>
+                  <span>
+                    You need {result.passMarkPercent}% to pass. Review the
+                    questions and try again.
+                  </span>
+                  <button className="text-button" type="button" onClick={retryQuiz}>
+                    Try the quiz again
+                  </button>
+                </div>
+              )}
+
+              <div className="quiz-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => setActiveTab('registration')}
+                >
+                  Back to registration
+                </button>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={submittingQuiz}
+                >
+                  {submittingQuiz ? 'Submitting…' : 'Submit quiz'}
+                  {!submittingQuiz && <span aria-hidden="true">→</span>}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {activeTab === 'certificate' && result?.passed && profile && (
+          <div className="certificate-content">
+            <div className="success-heading">
+              <span className="success-icon" aria-hidden="true">✓</span>
+              <div>
+                <span className="section-kicker">QUIZ COMPLETE</span>
+                <h2>You passed with {result.percent}%</h2>
+                <p>
+                  Congratulations, {profile.fullname}. Your certificate is
+                  ready.
+                </p>
+              </div>
+            </div>
+
+            <p className={result.emailSent ? 'success-message' : 'info-message'} role="status">
+              {emailNotice}
+            </p>
+
+            {certificateError && (
+              <div className="error-message" role="alert">
+                <span>{certificateError}</span>
+                <button className="text-button" type="button" onClick={retryCertificate}>
+                  Try again
+                </button>
+              </div>
+            )}
+
+            {certificateUrl && (
+              <>
+                <div className="certificate-preview">
+                  <img
+                    src={certificateUrl}
+                    alt={`Certificate of participation for ${profile.fullname}`}
+                  />
+                </div>
+                <div className="certificate-actions">
+                  <a
+                    className="primary-button download-button"
+                    href={certificateUrl}
+                    download="certificate-of-participation.png"
+                  >
+                    Download certificate <span aria-hidden="true">↓</span>
+                  </a>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => setActiveTab('quiz')}
+                  >
+                    Review quiz result
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
+
+      <footer className="site-footer">
+        <span>MSGR. F. MUBILIGI CATHOLIC TSS</span>
+        <span>Introduction to Artificial Intelligence (AI)</span>
+      </footer>
+    </main>
+  );
+}
+
+export default App;
